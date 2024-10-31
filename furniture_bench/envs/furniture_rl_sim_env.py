@@ -1234,19 +1234,24 @@ class FurnitureSimEnv(gym.Env):
     def gripper_width(self):
         return self.dof_pos[:, 7:8] + self.dof_pos[:, 8:9]
 
-    def _done(self) -> torch.Tensor:
+    def _done(self):
         dones = torch.zeros((self.num_envs, 1), dtype=torch.bool, device=self.device)
         if self.manual_done:
-            return dones
+            return dones, dones
+        terminated = torch.zeros((self.num_envs, 1), dtype=torch.bool, device=self.device)
+        truncated = torch.zeros((self.num_envs, 1), dtype=torch.bool, device=self.device)
+        
         for env_idx in range(self.num_envs):
             timeout = self.env_steps[env_idx] > self.furniture.max_env_steps
-            if self.furnitures[env_idx].all_assembled() or timeout:
-                dones[env_idx] = 1
-                # if timeout:
-                #     gym.logger.warn(f"[env] env_idx: {env_idx} timeout")
+            if self.furnitures[env_idx].all_assembled():
+                terminated[env_idx] = 1
+            elif timeout:
+                truncated[env_idx] = 1
+                
         if self.np_step_out:
-            dones = dones.cpu().numpy().astype(bool)
-        return dones
+            terminated = terminated.cpu().numpy().astype(bool)
+            truncated = truncated.cpu().numpy().astype(bool)
+        return terminated, truncated
 
     def _get_color_obs(self, color_obs):
         color_obs = torch.stack(color_obs)[..., :-1]  # RGBA -> RGB
@@ -2035,10 +2040,15 @@ class FurnitureRLSimEnv(FurnitureSimEnv):
 
     def _done(self):
         if self.manual_done:
-            return torch.zeros((self.num_envs, 1), dtype=torch.bool, device=self.device)
-        return (
-            self.already_assembled.sum(dim=1) == len(self.pairs_to_assemble)
-        ).unsqueeze(1)
+            return torch.zeros((self.num_envs, 1), dtype=torch.bool, device=self.device), torch.zeros((self.num_envs, 1), dtype=torch.bool, device=self.device)
+        
+        # Check if all parts are assembled
+        terminated = (self.already_assembled.sum(dim=1) == len(self.pairs_to_assemble))
+        
+        # Check if steps exceed max_env_steps
+        truncated = self.env_steps >= self.max_env_steps - 1
+        
+        return terminated.unsqueeze(1), truncated.unsqueeze(1)
 
     @torch.no_grad()
     def step(self, action: torch.Tensor, sample_perturbations: bool = False):
@@ -2058,7 +2068,7 @@ class FurnitureRLSimEnv(FurnitureSimEnv):
             self.recorder.record_frame(obs)
 
         reward = self._reward()
-        done = self._done()
+        terminated, truncated = self._done()
 
         self.env_steps += 1
 
@@ -2071,7 +2081,8 @@ class FurnitureRLSimEnv(FurnitureSimEnv):
         return (
             obs,
             reward,
-            done,
+            terminated,
+            truncated,
             {"obs_success": True, "action_success": True},
         )
 
