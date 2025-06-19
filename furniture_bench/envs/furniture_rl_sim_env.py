@@ -104,6 +104,7 @@ class FurnitureSimEnv(gym.Env):
         """
         super(FurnitureSimEnv, self).__init__()
         self.device = torch.device("cuda", compute_device_id)
+        self.is_deleted = False
 
         if april_tags:
             global ASSET_ROOT
@@ -1683,12 +1684,20 @@ class FurnitureSimEnv(gym.Env):
         )
 
     def __del__(self):
+        if self.is_deleted:
+            return
         if not self.headless:
             self.isaac_gym.destroy_viewer(self.viewer)
         self.isaac_gym.destroy_sim(self.sim)
 
         if self.record:
             self.recorder.stop_recording()
+
+        self.is_deleted = True
+        print("FurnitureSimEnv deleted")
+
+    def close(self):
+        self.__del__()
 
 
 class FurnitureRLSimEnv(FurnitureSimEnv):
